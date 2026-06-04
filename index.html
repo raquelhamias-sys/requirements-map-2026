@@ -39,7 +39,7 @@ text{font-family:inherit}
   <div class="sub" id="sub"></div>
   <div id="ctrls"><label>View / color by:</label><span id="colorbtns"></span></div>
 </div>
-<div class="hint">Scroll to zoom · drag to pan</div>
+<div class="hint">Scroll to zoom · drag to pan · click a requirement to highlight its links · click empty space to clear</div>
 <div id="wrap"><svg id="svg"><g id="scene"></g></svg></div>
 <div id="legend"><h3 id="legtitle"></h3><div class="lh" id="leghint"></div><div id="legrows"></div></div>
 <div id="zoom"><span class="btn sm" id="zin">+</span><span class="btn sm" id="zout">−</span><span class="btn sm" id="zreset">Reset</span></div>
@@ -60,6 +60,7 @@ const DIMS=[
 ];
 let curDim='type';
 let colorMap={}, hidden=new Set();
+let selected=null;
 function layoutFor(dim){ return dim==='s1' ? 'job' : 'theme'; }
 let curLayout=layoutFor(curDim);
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
@@ -80,6 +81,9 @@ function nodeColor(n){const v=n[curDim]; if(!v) return '#3a4150'; return colorMa
 const scene=document.getElementById('scene');
 function render(){
   scene.innerHTML=''; const pos=POS();
+  let selNodes=null, selEdges=null;
+  if(selected!=null){ selNodes=new Set([selected]); selEdges=new Set();
+    EDGES.forEach(([a,b,s],idx)=>{ if(a===selected||b===selected){selEdges.add(idx);selNodes.add(a);selNodes.add(b);} }); }
   CL().forEach(c=>{
     const col=c.fire?FIRE:HIRE;
     const circ=document.createElementNS(SVG_NS,'circle');
@@ -93,24 +97,27 @@ function render(){
     t.setAttribute('font-size','13');t.setAttribute('font-weight','700');
     t.textContent=c.theme+'  ('+c.n+')'; scene.appendChild(t);
   });
-  EDGES.forEach(([a,b,s])=>{
+  EDGES.forEach(([a,b,s],idx)=>{
     const x1=wx(pos[a][0]),y1=wy(pos[a][1]),x2=wx(pos[b][0]),y2=wy(pos[b][1]);
     const mx=(x1+x2)/2,my=(y1+y2)/2; const dx=x2-x1,dy=y2-y1;
     const cx=mx-dy*0.18, cy=my+dx*0.18;
     const p=document.createElementNS(SVG_NS,'path');
     p.setAttribute('d',`M${x1},${y1} Q${cx},${cy} ${x2},${y2}`);
     p.setAttribute('fill','none');
+    const on = !selEdges || selEdges.has(idx);
     p.setAttribute('stroke',s==='strong'?'#f0b454':'#6ea8fe');
-    p.setAttribute('stroke-width',s==='strong'?2.4:1.2);
-    p.setAttribute('stroke-opacity',s==='strong'?0.6:0.4); scene.appendChild(p);
+    p.setAttribute('stroke-width', on ? (s==='strong'?3.0:1.8) : (s==='strong'?2.4:1.2));
+    p.setAttribute('stroke-opacity', selEdges ? (on?0.95:0.04) : (s==='strong'?0.6:0.4)); scene.appendChild(p);
   });
   NODES.forEach((n,i)=>{
-    const dimmed = hidden.has(n[curDim]);
-    const g=document.createElementNS(SVG_NS,'g'); g.setAttribute('opacity',dimmed?0.12:1);
+    const dimmed = hidden.has(n[curDim]) || (selNodes && !selNodes.has(i));
+    const g=document.createElementNS(SVG_NS,'g'); g.setAttribute('opacity',dimmed?0.1:1);
     const r=6+n.deg*3;
     const c=document.createElementNS(SVG_NS,'circle');
     c.setAttribute('cx',wx(pos[i][0]));c.setAttribute('cy',wy(pos[i][1]));c.setAttribute('r',r);
-    c.setAttribute('fill',nodeColor(n));c.setAttribute('stroke','#0f1115');c.setAttribute('stroke-width','1.2');
+    c.setAttribute('fill',nodeColor(n));
+    c.setAttribute('stroke', i===selected ? '#ffffff' : '#0f1115');
+    c.setAttribute('stroke-width', i===selected ? '2.8' : '1.2');
     g.appendChild(c);
     const t=document.createElementNS(SVG_NS,'text');
     t.setAttribute('x',wx(pos[i][0]));t.setAttribute('y',wy(pos[i][1])+r+9);
@@ -120,6 +127,7 @@ function render(){
     g.style.cursor='pointer';
     g.addEventListener('mousemove',e=>showTip(e,n));
     g.addEventListener('mouseleave',hideTip);
+    g.addEventListener('click',e=>{ e.stopPropagation(); selected = (selected===i?null:i); render(); });
     scene.appendChild(g);
   });
 }
@@ -142,7 +150,7 @@ const cb=document.getElementById('colorbtns');
 DIMS.forEach(d=>{
   const b=document.createElement('span');b.className='btn'+(d.key===curDim?' on':'');
   b.textContent=d.label;b.onclick=()=>{
-    const prevLayout=curLayout; curDim=d.key; curLayout=layoutFor(d.key); hidden.clear(); buildColors();
+    const prevLayout=curLayout; curDim=d.key; curLayout=layoutFor(d.key); hidden.clear(); selected=null; buildColors();
     [...cb.children].forEach(x=>x.classList.remove('on'));b.classList.add('on');
     render();renderLegend();
     if(curLayout!==prevLayout) fit();
@@ -179,10 +187,11 @@ svg.addEventListener('wheel',e=>{e.preventDefault();
   const f=Math.exp(-e.deltaY*0.0015);const nk=Math.min(8,Math.max(0.15,vt.k*f));
   vt.x=mx-(mx-vt.x)*(nk/vt.k);vt.y=my-(my-vt.y)*(nk/vt.k);vt.k=nk;applyT();
 },{passive:false});
-let drag=null;
-svg.addEventListener('mousedown',e=>{drag={x:e.clientX,y:e.clientY,vx:vt.x,vy:vt.y};svg.classList.add('drag')});
-addEventListener('mousemove',e=>{if(!drag)return;vt.x=drag.vx+(e.clientX-drag.x);vt.y=drag.vy+(e.clientY-drag.y);applyT()});
+let drag=null, moved=false;
+svg.addEventListener('mousedown',e=>{drag={x:e.clientX,y:e.clientY,vx:vt.x,vy:vt.y};moved=false;svg.classList.add('drag')});
+addEventListener('mousemove',e=>{if(!drag)return;if(Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y)>3)moved=true;vt.x=drag.vx+(e.clientX-drag.x);vt.y=drag.vy+(e.clientY-drag.y);applyT()});
 addEventListener('mouseup',()=>{drag=null;svg.classList.remove('drag')});
+svg.addEventListener('click',()=>{ if(moved){moved=false;return;} if(selected!=null){selected=null;render();} });
 document.getElementById('zin').onclick=()=>{vt.k=Math.min(8,vt.k*1.3);applyT()};
 document.getElementById('zout').onclick=()=>{vt.k=Math.max(0.15,vt.k/1.3);applyT()};
 document.getElementById('zreset').onclick=fit;
